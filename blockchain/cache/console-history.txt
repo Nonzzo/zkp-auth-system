@@ -1,0 +1,3 @@
+exit
+await ZKPAuth.registerUser("0xYourHashedCommitment");
+const ZKPAuth = await ethers.getContractAt("ZKPAuth", "0xZKPAuthContractAddress");

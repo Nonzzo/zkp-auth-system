@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo
+    container_name: zkp-mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - zkp-network
+
+  backend:
+    build: ./backend
+    container_name: zkp-backend
+    restart: always
+    depends_on:
+      - mongodb
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend/zk-circuits:/app/zk-circuits:ro
+    env_file:
+      - .env
+    environment:
+    - NODE_ENV=development
+    - MONGODB_URI=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017/zkp-auth?authSource=admin
+    networks:
+      - zkp-network
+  
+  frontend:
+    build: ./frontend
+    container_name: zkp-frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    environment:
+      - REACT_APP_API_URL=http://localhost:5000/api
+    networks:
+      - zkp-network
+
+volumes:
+  mongo_data:
+    name: zkp-mongo-data
+
+networks:
+  zkp-network:
+    driver: bridge
