@@ -6,20 +6,31 @@ node_modules/
 # Testing
 /coverage
 .nyc_output
+/backend/coverage/
+/frontend/coverage/
 
 # Production
-/frontend/build
-/backend/dist
+/frontend/build/
+/backend/dist/
+/backend/build/
+/frontend/dist/
 
 # Environment files
 .env
 .env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 !.env.example
 
 # Logs
 logs
 *.log
 npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
 
 # Runtime data
 pids
@@ -27,13 +38,19 @@ pids
 *.seed
 *.pid.lock
 
-# IDE
+# IDE and editors
 .idea/
 .vscode/
 *.swp
 *.swo
+*.swn
+*.bak
+.project
+.classpath
+*.launch
+.settings/
 
-# OS
+# OS generated files
 .DS_Store
 .DS_Store?
 ._*
@@ -44,11 +61,72 @@ Thumbs.db
 
 # ZK Circuit specific
 /backend/zk-circuits/build/
+/backend/zk-circuits/*/build/
+/backend/zk-circuits/*/*.r1cs
+/backend/zk-circuits/*/*.sym
+/backend/zk-circuits/*/*.wasm
 *.ptau
-/backend/zk-circuits/proving_key.json
-/backend/zk-circuits/verification_key.json
+*.zkey
+/backend/zk-circuits/*/verification_key.json
+/backend/zk-circuits/*/proving_key.json
+/backend/zk-circuits/*/witness.wtns
+/backend/zk-circuits/*/proof.json
+/backend/zk-circuits/*/public.json
+/backend/zk-circuits/*/verification_key.txt
 
-# Security
+# Blockchain specific
+/blockchain/artifacts/
+/blockchain/cache/
+/blockchain/typechain/
+/blockchain/typechain-types/
+/blockchain/deployments/
+/blockchain/coverage/
+/blockchain/.openzeppelin/
+hardhat.config.js.bak
+.secrets.json
+**/artifacts
+**/cache
+/blockchain/contracts/lib/
+.deps/
+forge-cache/
+broadcast/
+
+# Dependency directories
+jspm_packages/
+bower_components/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Yarn Integrity file
+.yarn-integrity
+
+# Hardhat
+cache/
+artifacts/
+
+# Foundry
+out/
+cache/
+broadcast/
+
+# Misc
+*.tsbuildinfo
+.vercel
+.next
+*.tgz
+.env.development
+.env.production
+.env.test
 *.pem
 *.key
 *.cert
+.secret
+mnemonic.txt
+private-key.txt
