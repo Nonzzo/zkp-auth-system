@@ -22,3 +22,5 @@ router.get('/verification-stats/:userId', verifyToken, async (req, res) => {
     res.status(500).json({ message: 'Error fetching verification stats' });
   }
 });
+
+module.exports = router;

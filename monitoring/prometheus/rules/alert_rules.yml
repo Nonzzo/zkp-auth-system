@@ -1,0 +1,55 @@
+groups:
+  - name: zkp_auth_alerts
+    interval: 30s
+    rules:
+      - alert: HighProofGenerationLatency
+        expr: histogram_quantile(0.95, rate(zkp_proof_generation_seconds_bucket[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High proof generation latency detected"
+          description: "95th percentile proof generation time is {{ $value }}s"
+
+      - alert: ProofVerificationFailureRate
+        expr: rate(zkp_proof_verified_total{result="invalid"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High proof verification failure rate"
+          description: "Failure rate is {{ $value | humanizePercentage }}"
+
+      - alert: AuthFailureRate
+        expr: rate(zkp_auth_attempts_total{result!="success"}[5m]) > 0.3
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Failure rate is {{ $value | humanizePercentage }}"
+
+      - alert: ProofGenerationErrors
+        expr: rate(zkp_proof_generated_total{status="error"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Proof generation errors detected"
+          description: "Error rate: {{ $value }}/sec"
+
+      - alert: MongoDBDown
+        expr: up{job="mongodb"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MongoDB is down"
+
+      - alert: BackendDown
+        expr: up{job="backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Backend service is down"

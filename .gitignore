@@ -116,6 +116,12 @@ out/
 cache/
 broadcast/
 
+# Key Management
+.keys/
+*.key
+*.backup
+encrypted/
+
 # Misc
 *.tsbuildinfo
 .vercel
@@ -130,3 +136,11 @@ broadcast/
 .secret
 mnemonic.txt
 private-key.txt
+log1.txt
+log.txt
+flattened-selected.txt
+selectflatten.sh
+tree.txt
+log2.txt
+Readme2.md
+

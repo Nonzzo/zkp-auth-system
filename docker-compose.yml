@@ -12,6 +12,7 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
     volumes:
       - mongo_data:/data/db
+      
     networks:
       - zkp-network
 
@@ -40,16 +41,80 @@ services:
     depends_on:
       - backend
     ports:
-      - "3000:80"
+      - "3001:80"
     environment:
       - REACT_APP_API_URL=http://localhost:5000/api
+    networks:
+      - zkp-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: zkp-prometheus
+    restart: always
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - zkp-network
+    
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: zkp-grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_PATHS_CONFIG=/etc/grafana/grafana.ini
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_PATHS_DASHBOARDS=/etc/grafana/dashboards
+    volumes:
+      - ./monitoring/grafana/grafana.ini:/etc/grafana/grafana.ini
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards
+      - grafana_data:/var/lib/grafana
+    user: "472:472"  # This is the grafana user:group in the container
+    networks:
+      - zkp-network
+      
+  mongodb-exporter:
+    image: bitnami/mongodb-exporter:latest
+    container_name: zkp-mongodb-exporter
+    command:
+      - '--mongodb.uri=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASSWORD}@mongodb:27017'
+    ports:
+      - "9216:9216"
+    networks:
+      - zkp-network
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: zkp-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
     networks:
       - zkp-network
 
 volumes:
   mongo_data:
     name: zkp-mongo-data
+  grafana_data:
+    name: zkp-grafana-data
+  prometheus_data:
+    name: zkp-prometheus-data
 
 networks:
   zkp-network:
     driver: bridge
+
+  

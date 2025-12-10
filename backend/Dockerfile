@@ -1,5 +1,5 @@
 # Multi-stage build for minimal image size
-FROM node:18 AS builder
+FROM node:18-alpine AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm install
@@ -21,3 +21,5 @@ WORKDIR /app
 COPY --from=builder /app .
 CMD ["node", "server.js"]
 EXPOSE 5000
+
+

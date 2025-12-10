@@ -2,33 +2,37 @@ const express = require("express");
 const { hashPassword, generateSalt } = require("../utils/hash");
 const { generateProof, verifyProof } = require("../utils/zkp");
 const { ethers } = require("ethers");
-const cors = require('cors');
 const router = express.Router();
+const { cryptoService } = require('../utils/crypto');
+const auditLogger = require('../utils/crypto/AuditLogger');
+const logger = require('../utils/monitoring/logger');
+ const VerificationStats = require("../models/VerificationStats"); 
+const {
+  proofGenerationDuration,
+  proofVerificationDuration,
+  authAttempts,
+  proofGenerated,
+  proofVerified,
+  activeVerifications,
+  usersRegistered
+} = require('../utils/monitoring/zkpMetrics');
 
-const corsOptions = {
-  origin: 'http://localhost:3000',
-  credentials: true
-};
-
-// MongoDB User Model (Assuming we have a User schema)
 const User = require("../models/User");
 
-
-router.post('/register', cors(corsOptions), async (req, res) => {
+router.post('/register', async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
-    // Check if user already exists
     const existingUser = await User.findOne({ username });
     if (existingUser) {
       return res.status(400).json({ error: "Username already exists" });
     }
 
     const salt = generateSalt();
-    const hashedPassword = await hashPassword(password);
+    const hashedPassword = await hashPassword(password, salt);  // ← FIX: Add salt parameter
     
     const newUser = new User({
       username,
@@ -37,13 +41,16 @@ router.post('/register', cors(corsOptions), async (req, res) => {
     });
 
     await newUser.save();
+    usersRegistered.inc();
 
+    logger.info({ userId: newUser._id, username }, 'User registered successfully');
     res.status(201).json({
       message: "✅ Registration successful!",
       userId: newUser._id
     });
   } catch (error) {
-    console.error("❌ Error in registration:", error);
+    authAttempts.labels('registration_error').inc();
+    logger.error({ error: error.message, stack: error.stack }, 'Registration error');  // ← FIX: Add stack trace
     res.status(500).json({
       error: "Server error",
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -51,56 +58,147 @@ router.post('/register', cors(corsOptions), async (req, res) => {
   }
 });
 
-// 
+router.post('/login', async (req, res) => {
+  const proofTimer = proofGenerationDuration.startTimer({ status: 'attempt' });
 
-router.post('/login', cors(corsOptions), async (req, res) => {
   try {
     const { username, password } = req.body;
     
-    console.log('Login attempt for user:', username);
+    logger.info({ username }, 'Login attempt started');
 
     if (!username || !password) {
+      authAttempts.labels('invalid_input').inc();
+      proofTimer({ status: 'failed' });
       return res.status(400).json({ message: "Username and password are required" });
     }
 
-    // Find user
     const user = await User.findOne({ username });
     if (!user) {
+      authAttempts.labels('user_not_found').inc();
+      proofTimer({ status: 'failed' });
       return res.status(401).json({ message: "Invalid credentials" });
     }
+    logger.info({ userId: user._id, username }, 'User found, generating proof...');
 
+    if (global.broadcastVerificationStatus) global.broadcastVerificationStatus(user._id, 'verifying');
+
+    
     try {
-      // Generate proof
-      console.log('Generating proof...');
       const proofData = await generateProof(user.passwordHash, password, user.salt);
+      proofGenerated.labels('success').inc();
+      proofTimer({ status: 'success' });
       
-      console.log('Verifying proof...');
-      // Verify the proof
-      const isValid = await verifyProof(proofData.proof, proofData.publicSignals);
+      const verifyTimer = proofVerificationDuration.startTimer({ status: 'attempt' });
+      activeVerifications.inc();
 
-      if (!isValid) {
-        return res.status(401).json({ message: "Authentication failed" });
+      try {
+        const isValid = await verifyProof(proofData.proof, proofData.publicSignals);
+
+        if (!isValid) {
+          proofVerified.labels('invalid').inc();
+          verifyTimer({ status: 'invalid' });
+          authAttempts.labels('invalid_proof').inc();
+
+          await VerificationStats.findOneAndUpdate(
+            { userId: user._id },
+            { 
+              $inc: { totalVerifications: 1 },
+              $set: { lastVerified: new Date() }
+            },
+            { upsert: true }
+          );
+          
+          await auditLogger.log('authentication_failed', {
+            userId: user._id,
+            reason: 'Invalid proof'
+          });
+          if (global.broadcastVerificationStatus) global.broadcastVerificationStatus(user._id, 'failed');
+          return res.status(401).json({ message: "Authentication failed" });
+        }
+
+        proofVerified.labels('valid').inc();
+        verifyTimer({ status: 'success' });
+        authAttempts.labels('success').inc();
+
+        await VerificationStats.findOneAndUpdate(
+            { userId: user._id },
+            { 
+              $inc: { totalVerifications: 1, successfulVerifications: 1 },
+              $set: { lastVerified: new Date() }
+            },
+            { upsert: true, new: true }
+        );
+
+        const sessionData = {
+          userId: user._id,
+          timestamp: Date.now()
+        };
+        
+        const encryptedSession = await cryptoService.encrypt(
+          JSON.stringify(sessionData)
+        );
+
+        await auditLogger.log('session_encrypted', {
+          userId: user._id,
+          success: true
+        });
+
+        const token = Buffer.from(`${username}-${Date.now()}`).toString('base64');
+        
+        logger.info({ userId: user._id, username }, 'User logged in successfully');
+
+        if (global.broadcastVerificationStatus) global.broadcastVerificationStatus(user._id, 'verified');
+        
+        res.json({
+          message: "✅ Authentication successful!",
+          token,
+          username,
+          userId: user._id,
+          session: encryptedSession
+        });
+
+      } catch (verifyError) {
+        proofVerified.labels('error').inc();
+        verifyTimer({ status: 'error' });
+        authAttempts.labels('verification_error').inc();
+        
+        await auditLogger.log('proof_verification_failed', {
+          userId: user._id,
+          error: verifyError.message
+        });
+        logger.error({ error: verifyError.message, stack: verifyError.stack }, 'Proof verification error');  // ← FIX: Add stack trace
+        return res.status(500).json({
+          message: "Error during proof verification",
+          debug: verifyError.message
+        });
+      } finally {
+        activeVerifications.dec();
       }
 
-      const token = Buffer.from(`${username}-${Date.now()}`).toString('base64');
-      
-      res.json({
-        message: "✅ Authentication successful!",
-        token,
-        username,
-        userId: user._id
-      });
-
     } catch (proofError) {
-      console.error('Proof verification error:', proofError);
+      proofGenerated.labels('error').inc();
+      proofTimer({ status: 'error' });
+      authAttempts.labels('proof_generation_error').inc();
+      
+      await auditLogger.log('proof_generation_failed', {
+        userId: user._id,
+        error: proofError.message
+      });
+      logger.error({ error: proofError.message, stack: proofError.stack }, 'Proof generation error');  // ← FIX: Add stack trace
       return res.status(500).json({
-        message: "Error during proof verification",
+        message: "Error generating proof",
         debug: proofError.message
       });
     }
 
   } catch (error) {
-    console.error('Login error:', error);
+    authAttempts.labels('login_error').inc();
+    proofTimer({ status: 'error' });
+    logger.error({ error: error.message, stack: error.stack }, 'Login error');  // ← FIX: Add stack trace
+    
+    await auditLogger.log('login_failed', {
+      error: error.message
+    });
     res.status(500).json({
       message: "Server error",
       debug: error.message
@@ -108,51 +206,57 @@ router.post('/login', cors(corsOptions), async (req, res) => {
   }
 });
 
-
-
-
-/**
- * 2️⃣ Generate Zero-Knowledge Proof for Login
- */
 router.post("/generate-proof", async (req, res) => {
-    try {
-        const { username, password } = req.body;
+  const proofTimer = proofGenerationDuration.startTimer({ status: 'attempt' });
 
-        // Fetch user from DB
-        const user = await User.findOne({ username });
-        if (!user) return res.status(404).json({ error: "User not found!" });
+  try {
+    const { username, password } = req.body;
 
-        // Generate proof
-        const proofData = await generateProof(user.passwordHash, password, user.salt);
-
-        return res.json({ proof: proofData.proof, publicSignals: proofData.publicSignals });
-    } catch (err) {
-        console.error("❌ Error generating proof:", err);
-        return res.status(500).json({ error: "Internal server error" });
+    const user = await User.findOne({ username });
+    if (!user) {
+      proofTimer({ status: 'failed' });
+      return res.status(404).json({ error: "User not found!" });
     }
+
+    const proofData = await generateProof(user.passwordHash, password, user.salt);
+    proofGenerated.labels('success').inc();
+    proofTimer({ status: 'success' });
+
+    return res.json({ proof: proofData.proof, publicSignals: proofData.publicSignals });
+  } catch (err) {
+    proofGenerated.labels('error').inc();
+    proofTimer({ status: 'error' });
+    logger.error({ error: err.message, stack: err.stack }, 'Proof generation error');  // ← FIX: Add stack trace
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
-/**
- * 3️⃣ Verify the Zero-Knowledge Proof
- */
-router.post("/verify-proof", cors(corsOptions), async (req, res) => {
-    try {
-        const { proof, publicSignals } = req.body;
+router.post("/verify-proof", async (req, res) => {
+  const verifyTimer = proofVerificationDuration.startTimer({ status: 'attempt' });
+  activeVerifications.inc();
 
-        // Verify proof
-        const isValid = await verifyProof(proof, publicSignals);
+  try {
+    const { proof, publicSignals } = req.body;
 
-        if (isValid) {
-            return res.json({ message: "✅ Authentication successful!" });
-        } else {
-            return res.status(400).json({ error: "❌ Authentication failed!" });
-        }
-    } catch (err) {
-        console.error("❌ Error verifying proof:", err);
-        return res.status(500).json({ error: "Internal server error" });
+    const isValid = await verifyProof(proof, publicSignals);
+
+    if (isValid) {
+      proofVerified.labels('valid').inc();
+      verifyTimer({ status: 'success' });
+      return res.json({ message: "✅ Authentication successful!" });
+    } else {
+      proofVerified.labels('invalid').inc();
+      verifyTimer({ status: 'invalid' });
+      return res.status(400).json({ error: "❌ Authentication failed!" });
     }
+  } catch (err) {
+    proofVerified.labels('error').inc();
+    verifyTimer({ status: 'error' });
+    logger.error({ error: err.message, stack: err.stack }, 'Proof verification error');  // ← FIX: Add stack trace
+    return res.status(500).json({ error: "Internal server error" });
+  } finally {
+    activeVerifications.dec();
+  }
 });
 
 module.exports = router;
-
-
